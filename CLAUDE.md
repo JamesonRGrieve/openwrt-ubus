@@ -16,18 +16,28 @@ imported and so can never reach 0-diff.
 
 ## 2. Design tenets
 
-- **Generic over the bus, not typed-per-feature.** `openwrt_uci_section`
-  expresses any uci config; `openwrt_ubus_call` invokes any ubus method. This is
-  *fuller* coverage than a fixed typed set and survives new OpenWrt features
-  with no code change. Typed resources, if added, are ergonomic sugar layered on
-  top — never the only path to a feature.
-- **Import to 0-diff is the point.** Every stateful resource implements
-  `ImportState`. Drift is scoped to declared keys so co-managed/imported boxes
-  don't throw phantom diffs.
-- **Secrets never in code.** The device password comes from the provider block
-  (injected from OpenBao at apply), never hard-coded.
+General Go/provider standards (generic-over-the-bus, import-to-0-diff,
+secrets-from-provider-block): see `/home/jameson/source/ai-prompts/go.md` §8.
+
+Repo-specific application of those tenets:
+
+- The bus-generic resources here are `openwrt_uci_section` (expresses any uci
+  config) and `openwrt_ubus_call` (invokes any ubus method). This is *fuller*
+  coverage than a fixed typed set and survives new OpenWrt features with no code
+  change. Typed resources, if added, are ergonomic sugar layered on top — never
+  the only path to a feature.
+- This provider replaces the `net/routers` shell/`shell_script` OpenWrt adapter,
+  whose resources cannot be imported and so can never reach 0-diff — hence the
+  import-to-0-diff discipline matters here specifically.
 
 ## 3. Layout
+
+General provider layout (provider-entry / `internal/<transport>` /
+`internal/provider` with `*_resource.go`+`*_data_source.go` pairs / `examples/`,
+and keeping the transport free of terraform-framework imports): see
+`/home/jameson/source/ai-prompts/go.md` §1/§8.
+
+Repo-specific concrete files (registry address `jamesonrgrieve/openwrt-ubus`):
 
 ```
 main.go                              provider server entry (address jamesonrgrieve/openwrt-ubus)
@@ -41,19 +51,17 @@ examples/                            runnable HCL
 
 ## 4. Conventions
 
-- **SPDX header** (`// SPDX-License-Identifier: AGPL-3.0-or-later`) on every Go file.
-- `gofmt`-clean, `go vet`-clean — both gate the commit. Run `make check`.
-- New resources/data sources: register in `provider.go`, add an `examples/`
-  snippet, and a unit test for any non-trivial pure logic (decode/split/diff).
-- ubus status codes live in `internal/ubus` — branch on the named consts, not
-  magic numbers.
-- Keep the transport (`internal/ubus`) free of any terraform-framework imports;
-  the provider layer adapts it.
+General Go/provider conventions (SPDX-per-file, gofmt/vet gating,
+register-in-`provider.go` + add-example + unit-test, branch-on-named-consts):
+see `/home/jameson/source/ai-prompts/go.md` §9/§3/§5/§8/§2.
+
+Repo-specific: ubus status codes live in the `internal/ubus` package.
 
 ## 5. Pre-commit gate
 
-`make check` = `tidy` + `gofmt` + `vet` + `test` + `build`, all clean. Mirror it
-in `.husky`/CI. `--no-verify` requires explicit operator authorization.
+`make check` (= `tidy` + `gofmt` + `vet` + `test` + `build`, mirrored in CI;
+`--no-verify` needs explicit authorization): see
+`/home/jameson/source/ai-prompts/go.md` §10.
 
 ## 6. Integration with `net/routers`
 
