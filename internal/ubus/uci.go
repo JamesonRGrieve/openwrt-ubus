@@ -5,6 +5,7 @@ package ubus
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Section is a decoded UCI section: its type, name/anonymous flag, and option
@@ -21,27 +22,41 @@ type Section struct {
 // GetSection reads a single section by name (or anonymous id). The bool is
 // false when the section does not exist.
 func (c *Client) GetSection(config, section string) (*Section, bool, error) {
-	data, err := c.Call("uci", "get", map[string]any{
-		"config":  config,
-		"section": section,
-	})
-	if err != nil {
-		if IsNotFound(err) {
-			return nil, false, nil
+	// Retry an empty/undecodable read: even serialized, the device occasionally
+	// returns a code-only `uci get` result (no `values`) under load. That is a
+	// transient glitch for a section we're addressing by id, not a real
+	// not-found — so retry briefly rather than fail the refresh.
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
 		}
-		return nil, false, err
+		data, err := c.Call("uci", "get", map[string]any{
+			"config":  config,
+			"section": section,
+		})
+		if err != nil {
+			if IsNotFound(err) {
+				return nil, false, nil
+			}
+			lastErr = err
+			continue
+		}
+		var wrap struct {
+			Values json.RawMessage `json:"values"`
+		}
+		if err := json.Unmarshal(data, &wrap); err != nil || len(wrap.Values) == 0 {
+			lastErr = fmt.Errorf("decode uci get values: empty/invalid response (%d bytes)", len(data))
+			continue
+		}
+		sec, err := decodeSection(wrap.Values)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return sec, true, nil
 	}
-	var wrap struct {
-		Values json.RawMessage `json:"values"`
-	}
-	if err := json.Unmarshal(data, &wrap); err != nil {
-		return nil, false, fmt.Errorf("decode uci get values: %w", err)
-	}
-	sec, err := decodeSection(wrap.Values)
-	if err != nil {
-		return nil, false, err
-	}
-	return sec, true, nil
+	return nil, false, lastErr
 }
 
 func decodeSection(raw json.RawMessage) (*Section, error) {

@@ -102,6 +102,13 @@ type Client struct {
 	// just-deleted bridge-vlan, resurrecting it). Create/Update/Delete hold this
 	// for their full sequence so only one mutation+commit runs at a time.
 	writeMu sync.Mutex
+
+	// callMu serializes every individual ubus HTTP call. OpenWrt's
+	// uhttpd-mod-ubus on a small AP cannot service the ~10 concurrent reads
+	// Terraform issues during refresh — some return a code-only result with no
+	// data (observed: `uci get` → [0] with empty values → "unexpected end of
+	// JSON input"). Serializing all calls keeps the device from being overrun.
+	callMu sync.Mutex
 }
 
 // LockWrites / UnlockWrites bracket a full mutation sequence so concurrent
@@ -172,6 +179,11 @@ func (c *Client) rawCall(session, object, method string, args any) (json.RawMess
 	if err != nil {
 		return nil, -1, err
 	}
+
+	// Serialize every ubus call — the device cannot service concurrent requests
+	// reliably (see callMu).
+	c.callMu.Lock()
+	defer c.callMu.Unlock()
 
 	resp, err := c.http.Post(c.endpoint, "application/json", bytes.NewReader(payload))
 	if err != nil {
