@@ -134,7 +134,11 @@ func (r *uciSectionResource) ModifyPlan(ctx context.Context, req resource.Modify
 	for _, k := range keys {
 		sv, sok := so[k]
 		pv, pok := po[k]
-		if sok != pok || (sok && pok && !sv.Equal(pv)) {
+		// Replace only when the key is present in BOTH and differs — a genuine
+		// in-place-impossible change (e.g. a bridge-vlan VID 59->58). When state
+		// lacks the key (fresh import captures no options), adopt without
+		// recreating; the declared value is applied as a normal in-place set.
+		if sok && pok && !sv.Equal(pv) {
 			resp.RequiresReplace = append(resp.RequiresReplace, path.Root("options"))
 			return
 		}
