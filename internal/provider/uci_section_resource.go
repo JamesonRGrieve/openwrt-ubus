@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -21,6 +22,7 @@ var (
 	_ resource.Resource                = &uciSectionResource{}
 	_ resource.ResourceWithImportState = &uciSectionResource{}
 	_ resource.ResourceWithConfigure   = &uciSectionResource{}
+	_ resource.ResourceWithModifyPlan  = &uciSectionResource{}
 )
 
 // uciSectionResource manages a single UCI section over ubus. It is deliberately
@@ -41,13 +43,14 @@ func NewUCISectionResource() resource.Resource {
 }
 
 type uciSectionModel struct {
-	ID      types.String `tfsdk:"id"`
-	Config  types.String `tfsdk:"config"`
-	Type    types.String `tfsdk:"type"`
-	Name    types.String `tfsdk:"name"`
-	Section types.String `tfsdk:"section"`
-	Options types.Map    `tfsdk:"options"`
-	Lists   types.Map    `tfsdk:"lists"`
+	ID               types.String `tfsdk:"id"`
+	Config           types.String `tfsdk:"config"`
+	Type             types.String `tfsdk:"type"`
+	Name             types.String `tfsdk:"name"`
+	Section          types.String `tfsdk:"section"`
+	Options          types.Map    `tfsdk:"options"`
+	Lists            types.Map    `tfsdk:"lists"`
+	RecreateOnChange types.Set    `tfsdk:"recreate_on_change"`
 }
 
 var listElemType = types.ListType{ElemType: types.StringType}
@@ -96,7 +99,45 @@ func (r *uciSectionResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				ElementType:         listElemType,
 				MarkdownDescription: "List-valued UCI options. Manages only declared keys (see options).",
 			},
+			"recreate_on_change": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Option keys that are identity-defining and cannot be changed in place — " +
+					"a change to any of them forces the section to be destroyed and recreated. Required for " +
+					"DSA bridge-vlan `vlan` (VID): OpenWrt's `uci set vlan=...` + reload does NOT retag the bridge, " +
+					"so the section must be removed and re-added.",
+			},
 		},
+	}
+}
+
+// ModifyPlan forces replacement when an identity-defining option (listed in
+// recreate_on_change) differs between prior state and plan — an in-place uci set
+// won't take effect for these (e.g. a bridge-vlan VID on DSA).
+func (r *uciSectionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return // create or destroy — nothing to compare
+	}
+	var state, plan uciSectionModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() || plan.RecreateOnChange.IsNull() || plan.RecreateOnChange.IsUnknown() {
+		return
+	}
+	var keys []string
+	resp.Diagnostics.Append(plan.RecreateOnChange.ElementsAs(ctx, &keys, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	so := state.Options.Elements()
+	po := plan.Options.Elements()
+	for _, k := range keys {
+		sv, sok := so[k]
+		pv, pok := po[k]
+		if sok != pok || (sok && pok && !sv.Equal(pv)) {
+			resp.RequiresReplace = append(resp.RequiresReplace, path.Root("options"))
+			return
+		}
 	}
 }
 
