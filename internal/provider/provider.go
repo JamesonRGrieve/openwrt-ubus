@@ -21,7 +21,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/JamesonRGrieve/openwrt-ubus/internal/ubus"
+	"github.com/JamesonRGrieve/tofu-openwrt-ubus/internal/ubus"
 )
 
 // Ensure the provider satisfies the framework interface.

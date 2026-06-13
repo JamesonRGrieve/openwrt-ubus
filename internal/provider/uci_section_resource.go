@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/JamesonRGrieve/openwrt-ubus/internal/ubus"
+	"github.com/JamesonRGrieve/tofu-openwrt-ubus/internal/ubus"
 )
 
 var (

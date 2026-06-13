@@ -12,7 +12,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/JamesonRGrieve/openwrt-ubus/internal/provider"
+	"github.com/JamesonRGrieve/tofu-openwrt-ubus/internal/provider"
 )
 
 // version is overridden at build time via -ldflags.

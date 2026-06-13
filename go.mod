@@ -1,4 +1,4 @@
-module github.com/JamesonRGrieve/openwrt-ubus
+module github.com/JamesonRGrieve/tofu-openwrt-ubus
 
 go 1.26.4
 

@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/JamesonRGrieve/openwrt-ubus/internal/ubus"
+	"github.com/JamesonRGrieve/tofu-openwrt-ubus/internal/ubus"
 )
 
 var (
