@@ -94,7 +94,20 @@ type Client struct {
 	mu      sync.Mutex
 	session string
 	id      int
+
+	// writeMu serializes whole mutation sequences (add/set/delete + commit +
+	// reload). uci over ubus shares one staging area per config, so concurrent
+	// resource operations that each commit `network` race and clobber one
+	// another (observed: a parallel commit re-wrote a config that still held a
+	// just-deleted bridge-vlan, resurrecting it). Create/Update/Delete hold this
+	// for their full sequence so only one mutation+commit runs at a time.
+	writeMu sync.Mutex
 }
+
+// LockWrites / UnlockWrites bracket a full mutation sequence so concurrent
+// resource operations do not interleave their uci commits.
+func (c *Client) LockWrites()   { c.writeMu.Lock() }
+func (c *Client) UnlockWrites() { c.writeMu.Unlock() }
 
 // NewClient builds a Client. TLS verification is skipped when cfg.Insecure is
 // set (OpenWrt ships self-signed certs by default).

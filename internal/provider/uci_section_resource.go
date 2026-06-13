@@ -167,6 +167,11 @@ func (r *uciSectionResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
+	// Serialize the whole add+commit+reload so a parallel resource's commit
+	// can't clobber it (see Client.writeMu).
+	r.client.LockWrites()
+	defer r.client.UnlockWrites()
+
 	config := plan.Config.ValueString()
 	name := ""
 	if !plan.Name.IsNull() {
@@ -263,6 +268,10 @@ func (r *uciSectionResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	removed := removedKeys(state, plan)
 
+	// Serialize the whole set/delete+commit+reload (see Client.writeMu).
+	r.client.LockWrites()
+	defer r.client.UnlockWrites()
+
 	if err := r.client.SetOptions(config, section, values); err != nil {
 		resp.Diagnostics.AddError("uci set failed", err.Error())
 		return
@@ -290,6 +299,10 @@ func (r *uciSectionResource) Delete(ctx context.Context, req resource.DeleteRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Serialize the whole delete+commit+reload (see Client.writeMu).
+	r.client.LockWrites()
+	defer r.client.UnlockWrites()
+
 	config := state.Config.ValueString()
 	section := state.Section.ValueString()
 	if err := r.client.DeleteSection(config, section); err != nil {
