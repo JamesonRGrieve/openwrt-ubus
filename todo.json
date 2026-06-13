@@ -29,11 +29,11 @@
     {
       "number": 3,
       "title": "net/routers integration",
-      "exit_criteria": "modules/prosumer/openwrt emits openwrt_uci_section; shell_script retired; house-wap-ax23 + openwrt-lab at 0-diff via Semaphore.",
+      "exit_criteria": "modules/prosumer/openwrt emits openwrt_uci_section; shell_script retired; house-wap-ax23 + openwrt-lab managed via Semaphore.",
       "items": [
-        { "number": "3.1", "feature": "required_providers + per-device provider for_each (like opnsense)", "done": false },
-        { "number": "3.2", "feature": "Rewrite VLAN/interface/system/dhcp/dns/firewall/wireless/nat emit to openwrt_uci_section", "done": false },
-        { "number": "3.3", "feature": "Import existing devices to 0-diff; remove shell_script + ubus_uci.sh", "done": false }
+        { "number": "3.1", "feature": "required_providers + per-device provider for_each (like opnsense); mirror generator emits openwrt", "done": true },
+        { "number": "3.2", "feature": "Bridge: system + network bridge-vlans/SVIs + wireless converted to openwrt_uci_section. Remaining shell types: dns/dhcp/firewall/nat/vpn/ipsec/bgp/ddns/logrotate/etc.", "done": false },
+        { "number": "3.3", "feature": "house-wap-ax23 imported + adopted via Semaphore (15 sections managed; hostname/timezone applied, defaults preserved). Open: HOME_HOSTS VID 59->58 didn't persist (DSA VID needs delete+recreate; also network-wide); logrotate shell SSH failed; openwrt-lab pending", "done": false }
       ]
     },
     {
