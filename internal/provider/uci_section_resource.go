@@ -88,17 +88,13 @@ func (r *uciSectionResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"options": schema.MapAttribute{
 				Optional:            true,
-				Computed:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "Scalar UCI options for the section. Additive: declared keys are managed; options present on the device but not declared (e.g. imported defaults) are preserved, never deleted. Computed so the merged (declared + preserved) value is a valid plan.",
-				PlanModifiers:       []planmodifier.Map{PreserveUndeclaredMap()},
+				MarkdownDescription: "Scalar UCI options. The resource manages ONLY the keys you declare (uci set merges); device options not declared are left untouched and never deleted. Import does not capture device options, so the first apply sets the declared keys (idempotent for unchanged values) without disturbing the rest.",
 			},
 			"lists": schema.MapAttribute{
 				Optional:            true,
-				Computed:            true,
 				ElementType:         listElemType,
-				MarkdownDescription: "List-valued UCI options for the section. Additive (see options).",
-				PlanModifiers:       []planmodifier.Map{PreserveUndeclaredMap()},
+				MarkdownDescription: "List-valued UCI options. Manages only declared keys (see options).",
 			},
 		},
 	}
@@ -296,24 +292,17 @@ func (r *uciSectionResource) ImportState(ctx context.Context, req resource.Impor
 		m.Name = types.StringValue(sec.Name)
 	}
 
-	// Import captures the full device section (no prior declared scope).
-	if len(sec.Options) == 0 {
-		m.Options = types.MapNull(types.StringType)
-	} else {
-		v, d := types.MapValueFrom(ctx, types.StringType, sec.Options)
-		resp.Diagnostics.Append(d...)
-		m.Options = v
-	}
-	if len(sec.Lists) == 0 {
-		m.Lists = types.MapNull(listElemType)
-	} else {
-		v, d := types.MapValueFrom(ctx, listElemType, sec.Lists)
-		resp.Diagnostics.Append(d...)
-		m.Lists = v
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	// Do NOT capture device options into state on import. The resource manages
+	// only the options/lists declared in config (additive — uci set merges).
+	// Capturing the full device section would make the authoritative map plan to
+	// DELETE undeclared device defaults (interface gateway, ip6assign, proto,
+	// system compat_version, …) on the first apply. Leaving them null means the
+	// first apply only SETS the declared keys (idempotent for unchanged values)
+	// and never strips live config the config doesn't mention. (sec is read only
+	// to confirm existence + bind config/type/name/section above.)
+	_ = sec
+	m.Options = types.MapNull(types.StringType)
+	m.Lists = types.MapNull(listElemType)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
