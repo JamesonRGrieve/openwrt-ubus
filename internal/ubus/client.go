@@ -103,11 +103,12 @@ type Client struct {
 	// for their full sequence so only one mutation+commit runs at a time.
 	writeMu sync.Mutex
 
-	// callMu serializes every individual ubus HTTP call. OpenWrt's
-	// uhttpd-mod-ubus on a small AP cannot service the ~10 concurrent reads
-	// Terraform issues during refresh — some return a code-only result with no
-	// data (observed: `uci get` → [0] with empty values → "unexpected end of
-	// JSON input"). Serializing all calls keeps the device from being overrun.
+	// callMu serializes every individual ubus HTTP call. This is a precaution
+	// for small APs whose uhttpd-mod-ubus has a tiny request backlog: Terraform
+	// issues many refresh reads at once, and serializing keeps the device from
+	// being overrun. (The code-only `uci get` results we first saw were NOT a
+	// concurrency fault — they were stale anonymous `cfgXXXX` ids after a config
+	// renumber, now handled by re-resolving anonymous sections by identity.)
 	callMu sync.Mutex
 }
 

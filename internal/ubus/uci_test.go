@@ -42,6 +42,67 @@ func TestDecodeSection(t *testing.T) {
 	}
 }
 
+func TestSectionMatches(t *testing.T) {
+	brvlan := &Section{
+		Type:      "bridge-vlan",
+		Anonymous: true,
+		Options:   map[string]string{"device": "br-lan", "vlan": "58"},
+	}
+	cases := []struct {
+		name     string
+		sec      *Section
+		secType  string
+		identity map[string]string
+		want     bool
+	}{
+		{"full match", brvlan, "bridge-vlan", map[string]string{"device": "br-lan", "vlan": "58"}, true},
+		{"match on subset of options", brvlan, "bridge-vlan", map[string]string{"vlan": "58"}, true},
+		{"wrong type", brvlan, "interface", map[string]string{"vlan": "58"}, false},
+		{"value mismatch", brvlan, "bridge-vlan", map[string]string{"vlan": "59"}, false},
+		{"missing option", brvlan, "bridge-vlan", map[string]string{"pvid": "1"}, false},
+		{"empty identity never matches", brvlan, "bridge-vlan", map[string]string{}, false},
+		{"nil section", nil, "bridge-vlan", map[string]string{"vlan": "58"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := SectionMatches(c.sec, c.secType, c.identity); got != c.want {
+				t.Errorf("SectionMatches = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestFindUniqueSection(t *testing.T) {
+	// Models a network config after a 59->58 cutover renumbered anonymous ids:
+	// the VID-58 bridge-vlan is what we want to re-resolve by identity.
+	all := map[string]*Section{
+		"lan":       {Type: "interface", Name: "lan", Options: map[string]string{"proto": "static"}},
+		"cfg05a1b0": {Type: "bridge-vlan", Anonymous: true, Options: map[string]string{"device": "br-lan", "vlan": "1"}},
+		"cfg0ca1b0": {Type: "bridge-vlan", Anonymous: true, Options: map[string]string{"device": "br-lan", "vlan": "58"}},
+		"cfg07a1b0": {Type: "bridge-vlan", Anonymous: true, Options: map[string]string{"device": "br-lan", "vlan": "82"}},
+	}
+
+	t.Run("unique match returns id and section", func(t *testing.T) {
+		id, sec, n := FindUniqueSection(all, "bridge-vlan", map[string]string{"device": "br-lan", "vlan": "58"})
+		if n != 1 || id != "cfg0ca1b0" || sec == nil || sec.Options["vlan"] != "58" {
+			t.Fatalf("got id=%q n=%d sec=%v, want cfg0ca1b0/1", id, n, sec)
+		}
+	})
+	t.Run("no match", func(t *testing.T) {
+		id, sec, n := FindUniqueSection(all, "bridge-vlan", map[string]string{"device": "br-lan", "vlan": "999"})
+		if n != 0 || id != "" || sec != nil {
+			t.Fatalf("got id=%q n=%d sec=%v, want 0/empty/nil", id, n, sec)
+		}
+	})
+	t.Run("ambiguous match returns count without choosing", func(t *testing.T) {
+		// Two sections share the identity (device only) — caller must not guess.
+		id, sec, n := FindUniqueSection(all, "bridge-vlan", map[string]string{"device": "br-lan"})
+		if n != 3 || id != "" || sec != nil {
+			t.Fatalf("got id=%q n=%d sec=%v, want 3/empty/nil", id, n, sec)
+		}
+	})
+}
+
 func TestIsNotFound(t *testing.T) {
 	if !IsNotFound(&StatusError{Object: "uci", Method: "get", Code: StatusNotFound}) {
 		t.Errorf("IsNotFound(StatusNotFound) = false, want true")

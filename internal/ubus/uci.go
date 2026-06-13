@@ -5,7 +5,6 @@ package ubus
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // Section is a decoded UCI section: its type, name/anonymous flag, and option
@@ -21,42 +20,105 @@ type Section struct {
 
 // GetSection reads a single section by name (or anonymous id). The bool is
 // false when the section does not exist.
+//
+// A successful `uci get` that returns no data/values is treated as not-found
+// rather than an error: addressing a section by an id that no longer resolves
+// (notably a stale anonymous `cfgXXXX` id after UCI renumbered the config)
+// comes back as a code-only result. The caller re-resolves anonymous sections
+// by identity, so reporting not-found here lets that recovery run instead of
+// failing the refresh.
 func (c *Client) GetSection(config, section string) (*Section, bool, error) {
-	// Retry an empty/undecodable read: even serialized, the device occasionally
-	// returns a code-only `uci get` result (no `values`) under load. That is a
-	// transient glitch for a section we're addressing by id, not a real
-	// not-found — so retry briefly rather than fail the refresh.
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
+	data, err := c.Call("uci", "get", map[string]any{
+		"config":  config,
+		"section": section,
+	})
+	if err != nil {
+		if IsNotFound(err) {
+			return nil, false, nil
 		}
-		data, err := c.Call("uci", "get", map[string]any{
-			"config":  config,
-			"section": section,
-		})
-		if err != nil {
-			if IsNotFound(err) {
-				return nil, false, nil
-			}
-			lastErr = err
-			continue
-		}
-		var wrap struct {
-			Values json.RawMessage `json:"values"`
-		}
-		if err := json.Unmarshal(data, &wrap); err != nil || len(wrap.Values) == 0 {
-			lastErr = fmt.Errorf("decode uci get values: empty/invalid response (%d bytes)", len(data))
-			continue
-		}
-		sec, err := decodeSection(wrap.Values)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return sec, true, nil
+		return nil, false, err
 	}
-	return nil, false, lastErr
+	if len(data) == 0 {
+		return nil, false, nil // code-only result: id does not resolve
+	}
+	var wrap struct {
+		Values json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(data, &wrap); err != nil {
+		return nil, false, fmt.Errorf("decode uci get response for %s.%s: %w", config, section, err)
+	}
+	if len(wrap.Values) == 0 {
+		return nil, false, nil
+	}
+	sec, err := decodeSection(wrap.Values)
+	if err != nil {
+		return nil, false, err
+	}
+	return sec, true, nil
+}
+
+// ListSections returns every section in a config keyed by its UCI section id
+// (the name for named sections, the server-assigned `cfgXXXX` id for anonymous
+// ones). It underpins re-resolution of anonymous sections whose stored id has
+// gone stale.
+func (c *Client) ListSections(config string) (map[string]*Section, error) {
+	data, err := c.Call("uci", "get", map[string]any{"config": config})
+	if err != nil {
+		if IsNotFound(err) {
+			return map[string]*Section{}, nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return map[string]*Section{}, nil
+	}
+	var wrap struct {
+		Values map[string]json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(data, &wrap); err != nil {
+		return nil, fmt.Errorf("decode uci config %q: %w", config, err)
+	}
+	out := make(map[string]*Section, len(wrap.Values))
+	for id, raw := range wrap.Values {
+		sec, err := decodeSection(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode section %q in config %q: %w", id, config, err)
+		}
+		out[id] = sec
+	}
+	return out, nil
+}
+
+// SectionMatches reports whether s is of secType and carries every option in
+// identity with the same value. An empty identity never matches: with nothing
+// to disambiguate on, claiming a section would be a guess.
+func SectionMatches(s *Section, secType string, identity map[string]string) bool {
+	if s == nil || s.Type != secType || len(identity) == 0 {
+		return false
+	}
+	for k, v := range identity {
+		if s.Options[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// FindUniqueSection scans all for the single section matching (secType,
+// identity). n is the number of matches; id and sec are set only when n == 1.
+// A caller treats n == 0 as not-found and n > 1 as ambiguous (it must not
+// guess which drifted section is the managed one).
+func FindUniqueSection(all map[string]*Section, secType string, identity map[string]string) (id string, sec *Section, n int) {
+	for k, s := range all {
+		if SectionMatches(s, secType, identity) {
+			id, sec = k, s
+			n++
+		}
+	}
+	if n != 1 {
+		return "", nil, n
+	}
+	return id, sec, 1
 }
 
 func decodeSection(raw json.RawMessage) (*Section, error) {

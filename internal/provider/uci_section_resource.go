@@ -214,7 +214,10 @@ func (r *uciSectionResource) Read(ctx context.Context, req resource.ReadRequest,
 		}
 	}
 
-	sec, found, err := r.client.GetSection(config, section)
+	anonymous := state.Name.IsNull() || state.Name.ValueString() == ""
+	identity := optionsToStringMap(ctx, state.Options)
+
+	sec, resolvedID, found, err := r.resolveSection(config, section, state.Type.ValueString(), anonymous, identity)
 	if err != nil {
 		resp.Diagnostics.AddError("uci get failed", err.Error())
 		return
@@ -223,6 +226,11 @@ func (r *uciSectionResource) Read(ctx context.Context, req resource.ReadRequest,
 		resp.State.RemoveResource(ctx)
 		return
 	}
+
+	// Persist the (possibly re-resolved) live section id so subsequent
+	// plan/apply address the section by its current id, never a stale one.
+	state.Section = types.StringValue(resolvedID)
+	state.ID = types.StringValue(config + "." + resolvedID)
 
 	state.Type = types.StringValue(sec.Type)
 
@@ -263,7 +271,8 @@ func (r *uciSectionResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 
 	config := state.Config.ValueString()
-	section := state.Section.ValueString()
+	anonymous := state.Name.IsNull() || state.Name.ValueString() == ""
+	identity := optionsToStringMap(ctx, state.Options)
 
 	values, diags := buildValues(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -272,9 +281,22 @@ func (r *uciSectionResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	removed := removedKeys(state, plan)
 
-	// Serialize the whole set/delete+commit+reload (see Client.writeMu).
+	// Serialize the whole set/delete+commit+reload (see Client.writeMu). Resolve
+	// the live section id INSIDE the lock so a sibling's commit can't renumber an
+	// anonymous id between resolution and our mutation.
 	r.client.LockWrites()
 	defer r.client.UnlockWrites()
+
+	_, section, found, err := r.resolveSection(config, state.Section.ValueString(), state.Type.ValueString(), anonymous, identity)
+	if err != nil {
+		resp.Diagnostics.AddError("uci get failed", err.Error())
+		return
+	}
+	if !found {
+		resp.Diagnostics.AddError("uci section not found",
+			fmt.Sprintf("%s.%s no longer exists on the device; cannot update", config, state.Section.ValueString()))
+		return
+	}
 
 	if err := r.client.SetOptions(config, section, values); err != nil {
 		resp.Diagnostics.AddError("uci set failed", err.Error())
@@ -292,8 +314,8 @@ func (r *uciSectionResource) Update(ctx context.Context, req resource.UpdateRequ
 		resp.Diagnostics.AddWarning("uci reload_config failed", err.Error())
 	}
 
-	plan.ID = state.ID
-	plan.Section = state.Section
+	plan.ID = types.StringValue(config + "." + section)
+	plan.Section = types.StringValue(section)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -303,12 +325,24 @@ func (r *uciSectionResource) Delete(ctx context.Context, req resource.DeleteRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// Serialize the whole delete+commit+reload (see Client.writeMu).
+	config := state.Config.ValueString()
+	anonymous := state.Name.IsNull() || state.Name.ValueString() == ""
+	identity := optionsToStringMap(ctx, state.Options)
+
+	// Serialize the whole delete+commit+reload (see Client.writeMu). Resolve the
+	// live section id INSIDE the lock so a sibling's commit can't renumber an
+	// anonymous id out from under us.
 	r.client.LockWrites()
 	defer r.client.UnlockWrites()
 
-	config := state.Config.ValueString()
-	section := state.Section.ValueString()
+	_, section, found, err := r.resolveSection(config, state.Section.ValueString(), state.Type.ValueString(), anonymous, identity)
+	if err != nil {
+		resp.Diagnostics.AddError("uci get failed", err.Error())
+		return
+	}
+	if !found {
+		return // already gone — nothing to delete
+	}
 	if err := r.client.DeleteSection(config, section); err != nil {
 		resp.Diagnostics.AddError("uci delete failed", err.Error())
 		return
@@ -363,6 +397,64 @@ func (r *uciSectionResource) ImportState(ctx context.Context, req resource.Impor
 	m.Options = types.MapNull(types.StringType)
 	m.Lists = types.MapNull(listElemType)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// resolveSection returns the live section and its current UCI id for a managed
+// section, recovering from anonymous-id drift. For a named section the id is
+// stable and used as-is. For an anonymous section whose stored `cfgXXXX` id no
+// longer addresses a section matching the managed identity (its declared scalar
+// options), the section is re-resolved by scanning the config for the unique
+// section of the same type with matching options — OpenWrt renumbers anonymous
+// ids whenever the config file is rewritten by a sibling add/delete, so the
+// stored id goes stale. found is false when the section is genuinely gone.
+func (r *uciSectionResource) resolveSection(config, storedID, secType string, anonymous bool, identity map[string]string) (*ubus.Section, string, bool, error) {
+	sec, found, err := r.client.GetSection(config, storedID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if found && (!anonymous || ubus.SectionMatches(sec, secType, identity)) {
+		return sec, storedID, true, nil
+	}
+	if !anonymous {
+		return nil, "", false, nil // named section: stable id, genuinely gone
+	}
+	// Anonymous section: the stored id is stale or now points at a different
+	// section. Re-resolve it by identity. With no identity to match on (e.g. a
+	// bare import captured no options) we cannot safely re-resolve, so report it
+	// not-found rather than risk adopting the wrong section.
+	if len(identity) == 0 {
+		return nil, "", false, nil
+	}
+	all, err := r.client.ListSections(config)
+	if err != nil {
+		return nil, "", false, err
+	}
+	id, rsec, n := ubus.FindUniqueSection(all, secType, identity)
+	switch n {
+	case 1:
+		return rsec, id, true, nil
+	case 0:
+		return nil, "", false, nil
+	default:
+		return nil, "", false, fmt.Errorf(
+			"cannot re-resolve anonymous %s section in config %q: %d sections match identity %v",
+			secType, config, n, identity)
+	}
+}
+
+// optionsToStringMap extracts a model's declared scalar options as a plain map
+// for identity matching. Returns nil when none are declared (an import captures
+// none), so re-resolution has nothing to match on and falls back to the stored
+// id.
+func optionsToStringMap(ctx context.Context, m types.Map) map[string]string {
+	if m.IsNull() || m.IsUnknown() {
+		return nil
+	}
+	out := map[string]string{}
+	if diags := m.ElementsAs(ctx, &out, false); diags.HasError() || len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // buildValues merges declared options (scalars) and lists (arrays) into the
