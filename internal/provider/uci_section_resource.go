@@ -336,11 +336,12 @@ func (r *uciSectionResource) ImportState(ctx context.Context, req resource.Impor
 	}
 
 	m := uciSectionModel{
-		ID:      types.StringValue(config + "." + section),
-		Config:  types.StringValue(config),
-		Type:    types.StringValue(sec.Type),
-		Section: types.StringValue(section),
-		Name:    types.StringNull(),
+		ID:               types.StringValue(config + "." + section),
+		Config:           types.StringValue(config),
+		Type:             types.StringValue(sec.Type),
+		Section:          types.StringValue(section),
+		Name:             types.StringNull(),
+		RecreateOnChange: types.SetNull(types.StringType),
 	}
 	if sec.Name != "" && !sec.Anonymous {
 		m.Name = types.StringValue(sec.Name)
