@@ -89,12 +89,14 @@ func (r *uciSectionResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"options": schema.MapAttribute{
 				Optional:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "Scalar UCI options for the section.",
+				MarkdownDescription: "Scalar UCI options for the section. Additive: declared keys are managed; options present on the device but not declared (e.g. imported defaults) are preserved, never deleted.",
+				PlanModifiers:       []planmodifier.Map{PreserveUndeclaredMap()},
 			},
 			"lists": schema.MapAttribute{
 				Optional:            true,
 				ElementType:         listElemType,
-				MarkdownDescription: "List-valued UCI options for the section.",
+				MarkdownDescription: "List-valued UCI options for the section. Additive (see options).",
+				PlanModifiers:       []planmodifier.Map{PreserveUndeclaredMap()},
 			},
 		},
 	}
