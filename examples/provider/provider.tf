@@ -13,7 +13,7 @@ variable "openwrt_password" {
 }
 
 provider "openwrt-ubus" {
-  host     = "192.168.8.98"
+  host     = "192.168.1.1"
   username = "root"
   password = var.openwrt_password
 }

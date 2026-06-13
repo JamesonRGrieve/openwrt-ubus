@@ -43,7 +43,7 @@ terraform {
 }
 
 provider "openwrt-ubus" {
-  host     = "192.168.8.98"
+  host     = "192.168.1.1"
   username = "root"
   password = var.openwrt_password # from OpenBao at apply time
   # scheme   = "https"  (default)

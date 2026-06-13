@@ -75,7 +75,7 @@ func IsNotFound(err error) bool {
 // Config configures a Client.
 type Config struct {
 	// Endpoint is the full URL to the ubus endpoint, e.g.
-	// https://192.168.8.98/ubus.
+	// https://192.168.1.1/ubus.
 	Endpoint string
 	Username string
 	Password string
