@@ -21,8 +21,8 @@
       "title": "Validate against live OpenWrt",
       "exit_criteria": "house-wap-ax23 sections import to 0-diff through the provider.",
       "items": [
-        { "number": "2.1", "feature": "Deploy built provider to the Semaphore runner (only host that reaches the WAP)", "done": false },
-        { "number": "2.2", "feature": "dev_overrides .tfrc + minimal config; import a live network section", "done": false },
+        { "number": "2.1", "feature": "Provider installable on the Semaphore runner: filesystem_mirror at /var/lib/semaphore/.terraform.d/plugins + scoped .terraformrc; tofu init verified", "done": true },
+        { "number": "2.2", "feature": "Live import to 0-diff proven: full 40-section house-wap-ax23 model -> tofu plan = 40 to import, 0 change", "done": true },
         { "number": "2.3", "feature": "Acceptance tests (TF_ACC) against a throwaway OpenWrt", "done": false }
       ]
     },
