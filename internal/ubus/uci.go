@@ -5,6 +5,7 @@ package ubus
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Section is a decoded UCI section: its type, name/anonymous flag, and option
@@ -241,4 +242,39 @@ func (c *Client) Commit(config string) error {
 func (c *Client) ReloadConfig() error {
 	_, err := c.Call("uci", "reload_config", map[string]any{})
 	return err
+}
+
+// ReloadService runs `/etc/init.d/<service> reload` via the `file.exec` ubus
+// method. This is a SEAMLESS reload — it re-applies a service's config without
+// bouncing it (the firewall ruleset reload preserves connection state; dnsmasq
+// re-reads leases/hosts) — and, unlike ReloadConfig, it fires even when no uci
+// change is staged, so it can reconcile a live service back to committed config.
+// It returns an error on a transport/ACL failure or a non-zero exit from the
+// init script. Only seamless init scripts belong here: `network`, wireguard, and
+// the like restart interfaces/tunnels and would drop the management path.
+func (c *Client) ReloadService(service string) error {
+	data, err := c.Call("file", "exec", map[string]any{
+		"command": "/etc/init.d/" + service,
+		"params":  []string{"reload"},
+	})
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Code   int    `json:"code"`
+		Stderr string `json:"stderr"`
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &out); err != nil {
+			return fmt.Errorf("decode file.exec result: %w", err)
+		}
+	}
+	if out.Code != 0 {
+		msg := strings.TrimSpace(out.Stderr)
+		if msg == "" {
+			msg = "no stderr"
+		}
+		return fmt.Errorf("/etc/init.d/%s reload: exit %d: %s", service, out.Code, msg)
+	}
+	return nil
 }

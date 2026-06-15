@@ -154,6 +154,7 @@ func (p *openwrtProvider) Resources(_ context.Context) []func() resource.Resourc
 	return []func() resource.Resource{
 		NewUCISectionResource,
 		NewUbusCallResource,
+		NewReconcileResource,
 	}
 }
 
