@@ -412,7 +412,7 @@ func (r *uciSectionResource) resolveSection(config, storedID, secType string, an
 	if err != nil {
 		return nil, "", false, err
 	}
-	if found && (!anonymous || ubus.SectionMatches(sec, secType, identity)) {
+	if found && storedIDIsAuthoritative(sec, secType, anonymous, identity) {
 		return sec, storedID, true, nil
 	}
 	if !anonymous {
@@ -420,8 +420,9 @@ func (r *uciSectionResource) resolveSection(config, storedID, secType string, an
 	}
 	// Anonymous section: the stored id is stale or now points at a different
 	// section. Re-resolve it by identity. With no identity to match on (e.g. a
-	// bare import captured no options) we cannot safely re-resolve, so report it
-	// not-found rather than risk adopting the wrong section.
+	// bare import whose stored id no longer resolves to its type) we cannot
+	// safely re-resolve, so report it not-found rather than risk adopting the
+	// wrong section.
 	if len(identity) == 0 {
 		return nil, "", false, nil
 	}
@@ -440,6 +441,32 @@ func (r *uciSectionResource) resolveSection(config, storedID, secType string, an
 			"cannot re-resolve anonymous %s section in config %q: %d sections match identity %v",
 			secType, config, n, identity)
 	}
+}
+
+// storedIDIsAuthoritative reports whether the section GetSection returned for the
+// stored id should be accepted as-is, rather than re-resolved by identity. It is
+// pure so the accept rule is unit-testable independent of the ubus transport.
+//
+//   - A named section's id is stable: accept it.
+//   - An anonymous section is accepted when it matches the managed identity, OR —
+//     crucially — when there is no identity to match on AND the stored id resolves
+//     to a section of the expected type. A freshly imported section captures no
+//     options (additive import), so its first Read has an empty identity; the
+//     user-supplied cfgXXXX id is authoritative there. Without this an anonymous
+//     import is deleted by its own post-import Read ("Cannot import non-existent
+//     remote object"). Identity re-resolution remains the fallback for a stale id
+//     that now resolves to the wrong section (caller handles that path).
+func storedIDIsAuthoritative(sec *ubus.Section, secType string, anonymous bool, identity map[string]string) bool {
+	if sec == nil {
+		return false
+	}
+	if !anonymous {
+		return true
+	}
+	if ubus.SectionMatches(sec, secType, identity) {
+		return true
+	}
+	return len(identity) == 0 && sec.Type == secType
 }
 
 // optionsToStringMap extracts a model's declared scalar options as a plain map
