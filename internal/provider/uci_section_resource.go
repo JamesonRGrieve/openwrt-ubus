@@ -51,6 +51,7 @@ type uciSectionModel struct {
 	Options          types.Map    `tfsdk:"options"`
 	Lists            types.Map    `tfsdk:"lists"`
 	RecreateOnChange types.Set    `tfsdk:"recreate_on_change"`
+	RemoveOptions    types.Set    `tfsdk:"remove_options"`
 }
 
 var listElemType = types.ListType{ElemType: types.StringType}
@@ -106,6 +107,16 @@ func (r *uciSectionResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					"a change to any of them forces the section to be destroyed and recreated. Required for " +
 					"DSA bridge-vlan `vlan` (VID): OpenWrt's `uci set vlan=...` + reload does NOT retag the bridge, " +
 					"so the section must be removed and re-added.",
+			},
+			"remove_options": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Option keys to explicitly DELETE from the section on every apply, even if they were " +
+					"never declared/managed by this resource. Unlike `options` (subset semantics — undeclared device keys are " +
+					"left untouched and never deleted, and import captures none), these are removed unconditionally. Deleting a " +
+					"missing option is a no-op. Use to strip stock/adopted config the model wants gone — e.g. clearing a base-LAN " +
+					"`ipaddr`/`netmask` to turn it into a pure-L2 interface. Do not list a key that also appears in `options` " +
+					"(the delete would undo the set).",
 			},
 		},
 	}
@@ -184,6 +195,18 @@ func (r *uciSectionResource) Create(ctx context.Context, req resource.CreateRequ
 	section, err := r.client.AddSection(config, plan.Type.ValueString(), name, values)
 	if err != nil {
 		resp.Diagnostics.AddError("uci add failed", err.Error())
+		return
+	}
+	// Strip any explicitly-removed options (stock/adopted keys the model wants
+	// gone). On a genuinely new section these don't exist yet (no-op); on a named
+	// section the device already carries with defaults, this clears them.
+	if rm := explicitRemovals(ctx, plan, &resp.Diagnostics); len(rm) > 0 {
+		if err := r.client.DeleteOptions(config, section, rm); err != nil {
+			resp.Diagnostics.AddError("uci delete option failed", err.Error())
+			return
+		}
+	}
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	if err := r.client.Commit(config); err != nil {
@@ -280,6 +303,12 @@ func (r *uciSectionResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 	removed := removedKeys(state, plan)
+	// Plus any options the model asks to strip unconditionally (stock/adopted
+	// device options never captured in state, e.g. a legacy base-LAN ipaddr).
+	removed = append(removed, explicitRemovals(ctx, plan, &resp.Diagnostics)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	// Serialize the whole set/delete+commit+reload (see Client.writeMu). Resolve
 	// the live section id INSIDE the lock so a sibling's commit can't renumber an
@@ -523,6 +552,18 @@ func removedKeys(state, plan uciSectionModel) []string {
 		}
 	}
 	return removed
+}
+
+// explicitRemovals returns the keys listed in remove_options — options to delete
+// unconditionally on apply (stock/adopted device options never captured in
+// state). DeleteOptions treats a missing key as a no-op, so this is idempotent.
+func explicitRemovals(ctx context.Context, plan uciSectionModel, diags *diag.Diagnostics) []string {
+	if plan.RemoveOptions.IsNull() || plan.RemoveOptions.IsUnknown() {
+		return nil
+	}
+	var out []string
+	diags.Append(plan.RemoveOptions.ElementsAs(ctx, &out, false)...)
+	return out
 }
 
 func splitID(id string) (config, section string, ok bool) {
